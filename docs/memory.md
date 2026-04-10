@@ -1,6 +1,6 @@
 # 프로젝트 메모리 (세션 인계용)
 
-마지막 업데이트: 2026-04-11 (FreeRTOS 결정 + UART 추가)
+마지막 업데이트: 2026-04-11 (FreeRTOS Core 1 포팅 완료)
 GitHub: https://github.com/msick2/GLCD
 
 이 문서는 다른 세션에서 작업을 이어받을 수 있도록 정리한 핸드오프 노트입니다.
@@ -37,7 +37,16 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 - Vop = 0x24 / 0x04 (튜닝 완료)
 - SPI 클럭 8 MHz
 
-### ⏳ Phase 2~11 — 미착수
+### ✅ Phase 5 부분 — FreeRTOS Core 1 포팅 완료
+- Raspberry Pi FreeRTOS-Kernel fork를 FetchContent로 자동 가져옴
+- `src/freertos_config/FreeRTOSConfig.h` (single-core, 1 ms tick, 32 KB heap)
+- `src/tasks/core1_entry.c`: LCD 초기화 + `lcd_task` 생성 + `vTaskStartScheduler()`
+- `src/tasks/lcd_task.c`: 데모 루프를 FreeRTOS task로 이식, `vTaskDelayUntil`로 정확한 10 Hz
+- `src/app/main.c`: Core 0은 stdio만 init 후 `multicore_launch_core1()` → `__wfi()` 루프
+- 바이너리 크기: 50 KB → 100 KB (FreeRTOS 커널 ~50 KB 추가)
+- `configNUMBER_OF_CORES = 1` — RTOS는 Core 1 전용, Core 0는 bare-metal 유지 (컨트롤 루프 추가 준비)
+
+### ⏳ Phase 2~4, 6~11 — 미착수
 모든 설계 결정은 끝났음. 코딩만 남음.
 
 ---
@@ -164,6 +173,8 @@ src/
 ├── settings/                 ⏳ Phase 7a — 설정 영구 저장
 ├── bms/                      ⏳ Phase 7b — BQ34Z100 I²C
 ├── learn/                    ⏳ Phase 8 — 학습 사이클 머신
+├── freertos_config/          ✅ FreeRTOSConfig.h (single-core, Core 1)
+├── tasks/                    ✅ Core 1 entry + lcd_task (데모 포팅)
 └── port/
     ├── pico/                 ✅ Pico HAL 구현
     │   ├── board_config.h    - 핀, SPI baud, Vop 값
@@ -302,12 +313,12 @@ Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
 
 | 우선순위 | Phase | 작업 | 예상 시간 |
 |---|---|---|---|
-| 1 | **Phase 2** | SDK 2.x 설치 + Pico 2 마이그레이션 | 1~2 시간 |
-| 2 | **Phase 3** | HAL 확장 (`hal_pwm`, `hal_adc`, `hal_i2c`) | 2~3 시간 |
+| 1 | **Phase 2** | SDK 2.x 설치 + Pico 2 마이그레이션 (FreeRTOS는 자동 포트 전환) | 1~2 시간 |
+| 2 | **Phase 3** | HAL 확장 (`hal_pwm`, `hal_adc`, `hal_i2c`, `hal_uart`) | 3~4 시간 |
 | 3 | **Phase 4** | AD7606 SPI+DMA 드라이버 + ring buffer + 평균 | 4~6 시간 |
 | 3 | **Phase 4** | PWM 85 kHz 두 슬라이스 셋업 | 2 시간 |
 | 4 | **Phase 7a** | 24LC256 EEPROM 드라이버 + settings 모듈 | 3~4 시간 |
-| 5 | **Phase 5** | PI 컨트롤러 + CC/CV 머신 + 듀얼 코어 셋업 + **FreeRTOS 통합** | 8~12 시간 |
+| 5 | **Phase 5** | PI 컨트롤러 + CC/CV 머신 + Core 0 타이머 ISR (FreeRTOS는 이미 포팅됨) | 6~10 시간 |
 | 6 | **Phase 6** | SW OCP/OVP/OTP + watchdog (HW OCP는 보드측) | 2~3 시간 |
 | 7 | **Phase 7b** | BQ34Z100 I²C 드라이버 | 4~6 시간 |
 | 8 | **Phase 8** | 학습 사이클 상태 머신 | 4~6 시간 |

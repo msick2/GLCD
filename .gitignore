@@ -1,5 +1,6 @@
 build/
 .cache/
+_deps/
 *.o
 *.elf
 *.bin

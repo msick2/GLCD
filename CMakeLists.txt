@@ -17,6 +17,27 @@ if(MCU_TARGET STREQUAL "pico")
     pico_sdk_init()
 endif()
 
+# ----- FreeRTOS-Kernel (Raspberry Pi fork) -----
+# Fetched on first configure. Single-core scheduler runs on Core 1 only;
+# Core 0 stays bare-metal and must not call any FreeRTOS APIs.
+if(MCU_TARGET STREQUAL "pico")
+    include(FetchContent)
+    FetchContent_Declare(
+        freertos_kernel
+        GIT_REPOSITORY https://github.com/raspberrypi/FreeRTOS-Kernel.git
+        GIT_TAG        main
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_GetProperties(freertos_kernel)
+    if(NOT freertos_kernel_POPULATED)
+        message(STATUS "Fetching FreeRTOS-Kernel (raspberrypi fork)...")
+        FetchContent_Populate(freertos_kernel)
+    endif()
+    set(FREERTOS_KERNEL_PATH ${freertos_kernel_SOURCE_DIR})
+    set(FREERTOS_CONFIG_FILE_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}/src/freertos_config)
+    include(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040/FreeRTOS_Kernel_import.cmake)
+endif()
+
 set(SRC_APP  ${CMAKE_CURRENT_LIST_DIR}/src/app/main.c)
 set(SRC_LCD  ${CMAKE_CURRENT_LIST_DIR}/src/lcd/lcd_st75256.c)
 set(SRC_UI
@@ -24,6 +45,10 @@ set(SRC_UI
     ${CMAKE_CURRENT_LIST_DIR}/src/ui/draw.c
     ${CMAKE_CURRENT_LIST_DIR}/src/ui/sim.c
     ${CMAKE_CURRENT_LIST_DIR}/src/ui/ui.c
+)
+set(SRC_TASKS
+    ${CMAKE_CURRENT_LIST_DIR}/src/tasks/core1_entry.c
+    ${CMAKE_CURRENT_LIST_DIR}/src/tasks/lcd_task.c
 )
 
 if(MCU_TARGET STREQUAL "pico")
@@ -42,6 +67,7 @@ add_executable(glcd
     ${SRC_APP}
     ${SRC_LCD}
     ${SRC_UI}
+    ${SRC_TASKS}
     ${SRC_PORT}
 )
 
@@ -50,14 +76,18 @@ target_include_directories(glcd PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src/hal
     ${CMAKE_CURRENT_LIST_DIR}/src/lcd
     ${CMAKE_CURRENT_LIST_DIR}/src/ui
+    ${CMAKE_CURRENT_LIST_DIR}/src/tasks
+    ${CMAKE_CURRENT_LIST_DIR}/src/freertos_config
     ${CMAKE_CURRENT_LIST_DIR}/src/port/${MCU_TARGET}
 )
 
 if(MCU_TARGET STREQUAL "pico")
     target_link_libraries(glcd PRIVATE
         pico_stdlib
+        pico_multicore
         hardware_spi
         hardware_gpio
+        FreeRTOS-Kernel-Heap4
     )
     pico_enable_stdio_usb(glcd 1)
     pico_enable_stdio_uart(glcd 0)
