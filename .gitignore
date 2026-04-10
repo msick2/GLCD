@@ -1,0 +1,11 @@
+build/
+.cache/
+*.o
+*.elf
+*.bin
+*.uf2
+*.hex
+*.map
+*.dis
+compile_commands.json
+.vscode/ipch/

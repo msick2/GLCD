@@ -1,0 +1,28 @@
+{
+    "cmake.configureOnOpen": true,
+    "cmake.generator": "Ninja",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.configureSettings": {
+        "PICO_BOARD": "pico"
+    },
+    "cmake.configureEnvironment": {
+        "PICO_SDK_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/pico-sdk",
+        "PICO_TOOLCHAIN_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/gcc-arm-none-eabi"
+    },
+    "cmake.environment": {
+        "PICO_SDK_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/pico-sdk",
+        "PICO_TOOLCHAIN_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/gcc-arm-none-eabi"
+    },
+    "terminal.integrated.env.windows": {
+        "PICO_SDK_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/pico-sdk",
+        "PICO_TOOLCHAIN_PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/gcc-arm-none-eabi",
+        "PATH": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/cmake/bin;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/gcc-arm-none-eabi/bin;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/ninja;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/python;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/picotool;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/pico-sdk-tools;C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/openocd;${env:PATH}"
+    },
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.compilerPath": "C:/Program Files/Raspberry Pi/Pico SDK v1.5.1/gcc-arm-none-eabi/bin/arm-none-eabi-gcc.exe",
+    "C_Cpp.default.intelliSenseMode": "gcc-arm",
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    }
+}
