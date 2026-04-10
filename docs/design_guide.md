@@ -82,37 +82,60 @@ BQ34Z100 같은 퓨얼게이지 IC의 학습 사이클(Capacity learning, OCV/RA
 
 ---
 
-## 4. 듀얼 코어 분담
+## 4. 듀얼 코어 분담 (확정)
+
+**Core 0 = bare-metal (RT)**, **Core 1 = FreeRTOS (UI/Comms)**
 
 ```
-┌──────────────────────┐  shared mem  ┌──────────────────────┐
-│ Core 0 (Real-time)   │ ◄══════════► │ Core 1 (UI / Comms)  │
-│                      │  snapshot    │                      │
-│ • PWM HW (85 kHz)    │              │ • LCD render (10 Hz) │
-│ • ADC DMA + 평균     │              │ • LCD flush SPI0     │
-│ • 8.5 kHz 컨트롤 PI  │  command Q   │ • I²C ↔ BQ34Z100     │
-│ • CC/CV 모드 전환    │              │ • 학습 사이클 머신   │
-│ • 안전 (OCP/OVP/OTP) │              │ • USB serial 로그    │
-│ • 하드 OCP ISR       │              │ • 사용자 입력 처리   │
-└──────────────────────┘              └──────────────────────┘
-   결정적 타이밍                          여유로운 작업 (10~100 ms)
+┌──────────────────────────┐  shared mem  ┌──────────────────────────────┐
+│ Core 0 (bare-metal RT)   │ ◄══════════► │ Core 1 (FreeRTOS scheduler)  │
+│                          │  snapshot    │                              │
+│ • PWM HW (85 kHz)        │              │ • lcd_task    (10 Hz)        │
+│ • ADC DMA + 평균         │              │ • bms_task    (1 Hz, BQ I²C) │
+│ • 8.5 kHz 컨트롤 ISR     │  command Q   │ • settings_task (EEPROM I²C) │
+│ • PI + CC/CV 모드 전환   │              │ • input_task    (button)     │
+│ • 안전 (OCP/OVP)         │              │ • learn_task    (학습 머신)   │
+│ • 하드 OCP NMI           │              │ • uart_task     (외부 통신)   │
+│                          │              │ • log_task      (USB CDC)    │
+└──────────────────────────┘              └──────────────────────────────┘
+   결정적 (jitter 0)                          유연 (RTOS scheduler)
 ```
+
+### Core 0 특징
+- **FreeRTOS API 호출 금지** (RTOS는 Core 1만 인지)
+- 타이머 인터럽트로 8.5 kHz 컨트롤 루프 직접 실행
+- ADC DMA + ring buffer는 백그라운드 자동
+- super-loop 없음, `__wfi()`로 인터럽트 대기
+- 결정성 최상 (RTOS scheduler 오버헤드 0)
+
+### Core 1 특징
+- FreeRTOS scheduler가 모든 task 관리
+- `configNUMBER_OF_CORES = 1` (단일 코어 모드)
+- 6~7개 task로 동시 작업 분리 (LCD, BMS, EEPROM, 학습, UART, USB, 입력)
+- 각 task는 `vTaskDelay`, `xQueueReceive(timeout)` 등으로 blocking 가능
+- 학습 사이클 같은 긴 blocking이 task로 자연스럽게 표현됨
 
 ### 데이터 교환 방식
 
-**측정 스냅샷** (Core 0 → Core 1, 8.5 kHz 갱신, 100 ms 소비):
+**측정 스냅샷** (Core 0 → Core 1, 8.5 kHz 갱신):
 - 더블 버퍼 + atomic 인덱스 swap
 - Core 0가 inactive 버퍼에 채우고 인덱스 swap
-- Core 1은 100 ms마다 active 인덱스의 버퍼만 read
+- Core 1 task가 필요할 때 active 인덱스의 버퍼만 read
 
 **명령 큐** (Core 1 → Core 0):
-- `multicore_fifo` 또는 spinlock-protected ring buffer
-- 모드 변경, setpoint 변경, start/stop
+- `multicore_fifo` (8 entry HW FIFO) 또는 spinlock-protected ring buffer
+- 명령 종류: SET_MODE, SET_I_CHG, SET_V_FULL, SET_I_DCHG, START_LEARN, STOP
+
+### FreeRTOS 도입 시점
+- **Phase 5 (컨트롤 루프 + 듀얼 코어 셋업)** 에서 도입
+- Pico 1 / Pico 2 모두 동일 task 코드 (port만 자동 선택)
+- MKV31 이식 시에도 task 코드 그대로 (port 변경만)
 
 ### 금지 사항
 - Core 0에서 `printf`, `malloc`, LCD/I²C 접근 금지 (지연/jitter 유발)
+- Core 0에서 FreeRTOS API 호출 금지
 - 공유 가변 데이터는 반드시 atomic 또는 double-buffer
-- DMA 채널 분리 (ADC DMA는 Core 0 전용, LCD SPI DMA는 Core 1 전용)
+- DMA 채널 분리 (ADC DMA는 Core 0 전용, LCD/EEPROM/UART DMA는 Core 1 전용)
 
 ---
 
@@ -501,6 +524,22 @@ NCP51313ADR2G에 EN/SD 핀이 있다면 AND 게이트 생략하고 SR 래치 출
 ### 12.5 USB (디버그)
 - USB CDC stdio (Pico 표준)
 - 디버그 로그, 명령 입력
+- Core 1의 `log_task`에서만 사용 (Core 0는 절대 안 씀)
+
+### 12.5b UART1 (외부 통신, 신규)
+- 핀: **GP8 TX, GP9 RX**
+- baud rate: TBD (사용자 협의 — 일반적으로 115200 bps)
+- 프로토콜: TBD (RS-232 / RS-485 / 단순 UART)
+- Core 1의 `uart_task`에서 처리 (FreeRTOS queue로 송수신 분리)
+- DMA 사용 권장 (RX 연속, TX on-demand)
+
+**용도 미정** — 다음 중 어느 것?
+- (a) PC와 명령/모니터링 (USB CDC 외 추가 채널)
+- (b) 외부 마스터 컨트롤러와 연결
+- (c) RS-485로 다른 BMS/계측기와 데이지 체인
+- (d) GPS / GSM / Wi-Fi 모듈 등 부가 모듈
+
+용도가 정해지면 프로토콜 설계 추가.
 
 ### 12.6 설정 저장 (EEPROM)
 
@@ -594,8 +633,8 @@ EEPROM은 외부 칩이라 플래시처럼 XIP 중단 문제가 없습니다. **
 | GP5 | I²C0 SCL | BQ34Z100 |
 | GP6 | I²C1 SDA | **24LC256 EEPROM (로컬)** |
 | GP7 | I²C1 SCL | EEPROM |
-| GP8 | 버튼 TAB | 풀업 (외부 또는 내부) |
-| GP9 | 버튼 UP | |
+| GP8 | **UART1 TX** | 외부 통신 |
+| GP9 | **UART1 RX** | 외부 통신 |
 | GP10 | SPI1 SCK | AD7606 |
 | GP11 | SPI1 TX | AD7606 |
 | GP12 | SPI1 RX | AD7606 |
@@ -613,8 +652,8 @@ EEPROM은 외부 칩이라 플래시처럼 XIP 중단 문제가 없습니다. **
 | GP24 | OCP fault input | SR 래치 Q 모니터 |
 | GP26 | OCP latch RESET | 래치 클리어 (active high pulse) |
 | GP25 | LED (Pico 내장) | 사용 중 |
-| GP27 | (RP2350 ADC1, 미사용) | 예비 |
-| GP28 | (RP2350 ADC2, 미사용) | 예비 |
+| GP27 | **버튼 TAB** | 풀업 (이동: GP8 → GP27) |
+| GP28 | **버튼 UP** | 풀업 (이동: GP9 → GP28) |
 | GP29 | VSYS 측정 (Pico 내장) | |
 
 핀 부족하면 PCB에서 일부 재배치 가능. 25 / 26 GPIO 사용.
@@ -664,6 +703,18 @@ src/
 │   └── settings_default.h
 ├── safety/                   ⏳ OCP/OVP/OTP/watchdog
 │   └── safety.[ch]
+├── uart_link/                ⏳ UART1 외부 통신 프로토콜
+│   ├── uart_link.[ch]
+│   └── uart_proto.[ch]
+├── freertos_config/          ⏳ FreeRTOS 설정
+│   └── FreeRTOSConfig.h
+├── tasks/                    ⏳ Core 1 FreeRTOS task 정의
+│   ├── lcd_task.c
+│   ├── bms_task.c
+│   ├── input_task.c
+│   ├── learn_task.c
+│   ├── uart_task.c
+│   └── log_task.c
 └── port/
     ├── pico/                 ✅ Pico HAL 구현
     │   ├── board_config.h
@@ -856,6 +907,9 @@ typedef struct {
 | 10 | ~~NCP51313ADR2G 토폴로지~~ | ✅ **확정: HS only → 비동기 buck** |
 | 11 | ~~Hall 센서~~ | ✅ **확정: ACS725LLCTR-10AU-S** |
 | 12 | ~~설정 저장~~ | ✅ **확정: 24LC256 EEPROM, I²C1** |
+| 13 | ~~듀얼 코어 분담~~ | ✅ **확정: Core 0 bare-metal, Core 1 FreeRTOS** |
+| 14 | ~~UART 추가~~ | ✅ **핀 확정: GP8/GP9 (UART1)**, **용도/프로토콜은 미정** |
+| 15 | UART 용도 / 프로토콜 / baud | PC통신? RS-485? 외부 마스터? |
 
 **모든 주요 미결정 사항 해결됨.** 다음 단계는 펌웨어 골격(HAL 확장 + 모듈 stub) 또는 PCB 회로 진행.
 
@@ -887,11 +941,15 @@ typedef struct {
 - [ ] PWM 85 kHz 두 슬라이스 셋업
 - [ ] 측정 채널 캘리브레이션 (gain/offset)
 
-### Phase 5 — 컨트롤 루프
+### Phase 5 — 컨트롤 루프 + FreeRTOS 도입
 - [ ] PI 컨트롤러 (float, anti-windup, bumpless)
 - [ ] CC/CV 모드 머신
-- [ ] 8.5 kHz 타이머 + tick handler
-- [ ] 듀얼 코어 셋업 + 데이터 교환 인프라
+- [ ] 8.5 kHz 타이머 + tick handler (Core 0 bare-metal)
+- [ ] **FreeRTOS-Kernel 통합** (Raspberry Pi fork, Pico 1/2 자동 분기)
+- [ ] **`FreeRTOSConfig.h`** (Core 1 only, single-core mode)
+- [ ] **Core 1 부트 → FreeRTOS scheduler 시작**
+- [ ] 듀얼 코어 데이터 교환 인프라 (스냅샷 더블 버퍼, 명령 큐)
+- [ ] 첫 task: `lcd_task` (기존 데모 루프 → task로 이전)
 - [ ] Soft-start
 
 ### Phase 6 — 안전
@@ -921,6 +979,12 @@ typedef struct {
 - [ ] BQ 데이터 (SOC/SOH/QMAX) → BATTERY 페이지
 - [ ] 학습 진행 단계 → LEARN 페이지
 - [ ] 사용자 입력 (CONTROL/SETTING 페이지)
+
+### Phase 9b — UART 통신 (병렬 가능)
+- [ ] UART1 HAL (`hal_uart.h` + `hal_uart_pico.c`)
+- [ ] uart_task: TX queue + RX queue + DMA
+- [ ] 프로토콜 정의 (사용자 협의 후)
+- [ ] 명령 처리 / 응답 / 모니터링 패킷
 
 ### Phase 10 — 버튼 입력 (선택)
 - [ ] `hal_input.h` + GPIO 폴링/디바운스
@@ -960,3 +1024,4 @@ typedef struct {
 | 2026-04-10 | 셀 범위 확정: 3S~6S (12.6~25.2 V). NCP51313 = HS only → 비동기 buck 확정. 인덕터 6S 기준 100 µH 재계산. |
 | 2026-04-10 | 24LC256 EEPROM 추가 (I²C1, 32 KB). 설정/캘리브레이션 영구 저장. settings 모듈 + eeprom 드라이버 추가 예정. |
 | 2026-04-10 | 모든 미결정 사항 해결: MCU=Pico 2 확정, 버튼 GPIO 할당, 입력 48V 고정, OCP 회로(SR latch + AND), NTC 없음(BQ가 처리), PCB 분리 확정, BQ chemistry는 bqStudio로 외부 등록. |
+| 2026-04-11 | FreeRTOS 도입 결정: Core 0 bare-metal, Core 1 FreeRTOS (single-core scheduler). UART1 추가 (GP8/GP9). 버튼 TAB/UP을 GP27/GP28로 이동. UART 용도/프로토콜은 미정. |
