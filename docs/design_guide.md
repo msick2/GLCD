@@ -681,14 +681,15 @@ src/
 │   ├── hal_spi.h             ✅
 │   ├── hal_gpio.h            ✅
 │   ├── hal_delay.h           ✅
-│   ├── hal_pwm.h             ⏳ 추가
+│   ├── hal_pwm.h             ✅
 │   ├── hal_adc.h             ⏳ 추가
-│   └── hal_i2c.h             ⏳ 추가
+│   ├── hal_i2c.h             ⏳ 추가
+│   └── hal_uart.h            ⏳ 추가
 ├── adc/                      ⏳ AD7606 드라이버
 │   ├── ad7606.[ch]
 │   └── adc_filter.[ch]       (오버샘플 평균)
-├── pwm/                      ⏳ 벅 PWM 추상화
-│   └── buck_pwm.[ch]
+├── pwm/                      ✅ 벅 PWM 추상화
+│   └── buck_pwm.[ch]         85 kHz 2채널, set_duty / emergency_stop
 ├── control/                  ⏳ PI + CC/CV 머신
 │   ├── pi.[ch]
 │   └── buck_ctrl.[ch]
@@ -706,24 +707,27 @@ src/
 ├── uart_link/                ⏳ UART1 외부 통신 프로토콜
 │   ├── uart_link.[ch]
 │   └── uart_proto.[ch]
-├── freertos_config/          ⏳ FreeRTOS 설정
-│   └── FreeRTOSConfig.h
-├── tasks/                    ⏳ Core 1 FreeRTOS task 정의
-│   ├── lcd_task.c
-│   ├── bms_task.c
-│   ├── input_task.c
-│   ├── learn_task.c
-│   ├── uart_task.c
-│   └── log_task.c
+├── freertos_config/          ✅ FreeRTOS 설정
+│   └── FreeRTOSConfig.h      single-core (Core 1 only), 1 ms tick, 32 KB heap
+├── tasks/                    ✅ Core 1 FreeRTOS tasks
+│   ├── core1_entry.[ch]      ✅ LCD init + task create + scheduler start
+│   ├── lcd_task.[ch]         ✅ 10 Hz 렌더
+│   ├── pwm_task.[ch]         ✅ buck PWM 초기화 + duty sweep 데모
+│   ├── bms_task.c            ⏳ Phase 7b
+│   ├── input_task.c          ⏳ Phase 10
+│   ├── learn_task.c          ⏳ Phase 8
+│   ├── uart_task.c           ⏳ Phase 9b
+│   └── log_task.c            ⏳ 필요 시
 └── port/
     ├── pico/                 ✅ Pico HAL 구현
-    │   ├── board_config.h
-    │   ├── hal_spi_pico.c
-    │   ├── hal_gpio_pico.c
-    │   ├── hal_delay_pico.c
-    │   ├── hal_pwm_pico.c    ⏳
+    │   ├── board_config.h    ✅ LCD 핀 + BUCK PWM 핀/주파수
+    │   ├── hal_spi_pico.c    ✅
+    │   ├── hal_gpio_pico.c   ✅
+    │   ├── hal_delay_pico.c  ✅
+    │   ├── hal_pwm_pico.c    ✅
     │   ├── hal_adc_pico.c    ⏳
-    │   └── hal_i2c_pico.c    ⏳
+    │   ├── hal_i2c_pico.c    ⏳
+    │   └── hal_uart_pico.c   ⏳
     └── mkv31/                ⏳ 향후 이식
 ```
 
@@ -936,20 +940,23 @@ typedef struct {
 - [ ] HAL 단위 테스트 (loopback, 더미)
 
 ### Phase 4 — ADC / PWM 모듈
+- [x] **PWM 85 kHz 두 슬라이스 셋업** (GP0 slice 0A, GP1 slice 0B)
+- [x] **hal_pwm + buck_pwm 모듈** (core-agnostic)
+- [x] **pwm_task** (Core 1 FreeRTOS, duty sweep 데모)
 - [ ] AD7606 드라이버 (SPI, DMA, CONVST 트리거)
 - [ ] 6채널 ring buffer + 평균 함수
-- [ ] PWM 85 kHz 두 슬라이스 셋업
 - [ ] 측정 채널 캘리브레이션 (gain/offset)
 
 ### Phase 5 — 컨트롤 루프 + FreeRTOS 도입
+- [x] **FreeRTOS-Kernel 통합** (Raspberry Pi fork, FetchContent 자동)
+- [x] **`FreeRTOSConfig.h`** (Core 1 only, single-core mode, 1 ms tick, 32 KB heap)
+- [x] **Core 1 부트 → FreeRTOS scheduler 시작** (`core1_entry.c`)
+- [x] **첫 task: `lcd_task`** (기존 데모 루프 → task로 이전, `vTaskDelayUntil`로 정확한 10 Hz)
+- [x] **두 번째 task: `pwm_task`** (priority 4, buck PWM 초기화 + duty sweep)
 - [ ] PI 컨트롤러 (float, anti-windup, bumpless)
 - [ ] CC/CV 모드 머신
-- [ ] 8.5 kHz 타이머 + tick handler (Core 0 bare-metal)
-- [ ] **FreeRTOS-Kernel 통합** (Raspberry Pi fork, Pico 1/2 자동 분기)
-- [ ] **`FreeRTOSConfig.h`** (Core 1 only, single-core mode)
-- [ ] **Core 1 부트 → FreeRTOS scheduler 시작**
+- [ ] 8.5 kHz 타이머 + tick handler (Core 0 bare-metal OR Core 1 HW timer ISR)
 - [ ] 듀얼 코어 데이터 교환 인프라 (스냅샷 더블 버퍼, 명령 큐)
-- [ ] 첫 task: `lcd_task` (기존 데모 루프 → task로 이전)
 - [ ] Soft-start
 
 ### Phase 6 — 안전
@@ -1025,3 +1032,5 @@ typedef struct {
 | 2026-04-10 | 24LC256 EEPROM 추가 (I²C1, 32 KB). 설정/캘리브레이션 영구 저장. settings 모듈 + eeprom 드라이버 추가 예정. |
 | 2026-04-10 | 모든 미결정 사항 해결: MCU=Pico 2 확정, 버튼 GPIO 할당, 입력 48V 고정, OCP 회로(SR latch + AND), NTC 없음(BQ가 처리), PCB 분리 확정, BQ chemistry는 bqStudio로 외부 등록. |
 | 2026-04-11 | FreeRTOS 도입 결정: Core 0 bare-metal, Core 1 FreeRTOS (single-core scheduler). UART1 추가 (GP8/GP9). 버튼 TAB/UP을 GP27/GP28로 이동. UART 용도/프로토콜은 미정. |
+| 2026-04-11 | FreeRTOS-Kernel 통합 완료 (Raspberry Pi fork, FetchContent). Core 1 FreeRTOS scheduler 동작. lcd_task가 기존 데모 루프를 대체. 바이너리 50 KB → 100 KB. |
+| 2026-04-11 | PWM 제어 계층 구현: hal_pwm + buck_pwm 모듈 + pwm_task. GP0/GP1이 85 kHz slice 0 A/B에서 듀티 sweep. board_config.h에 BUCK_*_PWM_PIN, BUCK_PWM_FREQ_HZ 추가. |

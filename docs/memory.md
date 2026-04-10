@@ -40,13 +40,25 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 ### ✅ Phase 5 부분 — FreeRTOS Core 1 포팅 완료
 - Raspberry Pi FreeRTOS-Kernel fork를 FetchContent로 자동 가져옴
 - `src/freertos_config/FreeRTOSConfig.h` (single-core, 1 ms tick, 32 KB heap)
-- `src/tasks/core1_entry.c`: LCD 초기화 + `lcd_task` 생성 + `vTaskStartScheduler()`
+- `src/tasks/core1_entry.c`: LCD 초기화 + 태스크 생성 + `vTaskStartScheduler()`
 - `src/tasks/lcd_task.c`: 데모 루프를 FreeRTOS task로 이식, `vTaskDelayUntil`로 정확한 10 Hz
 - `src/app/main.c`: Core 0은 stdio만 init 후 `multicore_launch_core1()` → `__wfi()` 루프
 - 바이너리 크기: 50 KB → 100 KB (FreeRTOS 커널 ~50 KB 추가)
 - `configNUMBER_OF_CORES = 1` — RTOS는 Core 1 전용, Core 0는 bare-metal 유지 (컨트롤 루프 추가 준비)
 
-### ⏳ Phase 2~4, 6~11 — 미착수
+### ✅ Phase 4 부분 — PWM 제어 계층 완료 (Core 1)
+- `src/hal/hal_pwm.h` — 추상 PWM 인터페이스 (opaque channel, init/set_duty/enable)
+- `src/port/pico/hal_pwm_pico.c` — RP2040 구현 (`hardware/pwm.h`, divider 1.0, top 계산)
+- `src/pwm/buck_pwm.[ch]` — BUCK_CHARGE / BUCK_DISCHARGE 관리, duty 캐시, `buck_pwm_emergency_stop`
+- `src/tasks/pwm_task.c` — Core 1 FreeRTOS task (priority 4), buck 초기화 + duty sweep 데모
+  - CHARGE: 0% ↔ 50% sweep, 10 ms/1% step
+  - DISCHARGE: 0% ↔ 80% sweep, 10 ms/2% step
+- 핀: GP0 = slice 0 A (CHARGE), GP1 = slice 0 B (DISCHARGE) — 동일 슬라이스라 주파수 정확히 동기
+- 주파수: `top+1 = 125M/85k = 1470.588` → top=1470, 실측 84.97 kHz (0.04% 오차)
+- duty 분해능: 1/1471 ≈ 0.068%
+- `board_config.h`에 `BUCK_CHARGE_PWM_PIN = 0`, `BUCK_DISCHARGE_PWM_PIN = 1`, `BUCK_PWM_FREQ_HZ = 85000` 추가
+
+### ⏳ Phase 2, 3, 4(ADC), 6~11 — 미착수
 모든 설계 결정은 끝났음. 코딩만 남음.
 
 ---
@@ -76,8 +88,8 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 
 | GPIO | 용도 | 상태 |
 |---|---|---|
-| GP0 | 충전 PWM | 미사용, Phase 4에서 |
-| GP1 | 방전 PWM | 미사용, Phase 4에서 |
+| GP0 | **충전 PWM (slice 0 A, 85 kHz)** | **사용 중** (pwm_task sweep) |
+| GP1 | **방전 PWM (slice 0 B, 85 kHz)** | **사용 중** (pwm_task sweep) |
 | GP2 | 충전 enable (gate driver) | 미사용 |
 | GP3 | 방전 enable | 미사용 |
 | GP4 | I²C0 SDA (BQ34Z100, 외부 보드) | 미사용 |
@@ -129,8 +141,8 @@ build.cmd clean
 `build.cmd`는 내부적으로 `pico-env.cmd`를 source해서 PATH 설정 후 `cmake -G Ninja .. && ninja` 실행.
 
 ### 출력
-- `build/glcd.uf2` (~50 KB) — Pico에 굽기
-- `build/glcd.elf` (~60 KB) — 디버깅용
+- `build/glcd.uf2` (~100 KB, FreeRTOS 포함) — Pico에 굽기
+- `build/glcd.elf` (~100 KB) — 디버깅용
 
 ### Flash
 1. Pico를 BOOTSEL 누른 채 USB 연결 → RPI-RP2 드라이브 마운트
@@ -148,7 +160,7 @@ picotool load -x build/glcd.uf2 -f
 
 ```
 src/
-├── app/main.c                ← 데모 루프 (Core 0 only, Pico 1 ROM float)
+├── app/main.c                ← Core 0 부트: stdio init + launch Core 1 + __wfi 루프
 ├── lcd/                      ← ST75256 4-gray 드라이버 ✅
 │   ├── lcd.h                 - 공용 API + LCD_COLOR_*
 │   ├── lcd_st75256.c         - init, draw_pixel, fill, flush, test fns
@@ -159,14 +171,16 @@ src/
 │   ├── sim.[ch]              - 시뮬 데이터 6개 상태
 │   └── ui.[ch]               - 탭/헤더/7페이지 렌더러
 ├── hal/                      ← 추상 인터페이스 ✅ (확장 예정)
-│   ├── hal_spi.h
-│   ├── hal_gpio.h
-│   ├── hal_delay.h
-│   ├── hal_pwm.h             ⏳ Phase 3
+│   ├── hal_spi.h             ✅
+│   ├── hal_gpio.h            ✅
+│   ├── hal_delay.h           ✅
+│   ├── hal_pwm.h             ✅  NEW: init / set_duty / enable
 │   ├── hal_adc.h             ⏳ Phase 3
-│   └── hal_i2c.h             ⏳ Phase 3
+│   ├── hal_i2c.h             ⏳ Phase 3
+│   └── hal_uart.h            ⏳ Phase 3
 ├── adc/                      ⏳ Phase 4 — AD7606 드라이버
-├── pwm/                      ⏳ Phase 4 — 벅 PWM 추상화
+├── pwm/                      ✅ 벅 PWM 추상화
+│   └── buck_pwm.[ch]         BUCK_CHARGE / BUCK_DISCHARGE, set_duty, emergency_stop
 ├── control/                  ⏳ Phase 5 — PI + CC/CV 머신
 ├── safety/                   ⏳ Phase 6 — OCP/OVP/OTP/watchdog
 ├── eeprom/                   ⏳ Phase 7a — 24LC256 드라이버
@@ -174,13 +188,17 @@ src/
 ├── bms/                      ⏳ Phase 7b — BQ34Z100 I²C
 ├── learn/                    ⏳ Phase 8 — 학습 사이클 머신
 ├── freertos_config/          ✅ FreeRTOSConfig.h (single-core, Core 1)
-├── tasks/                    ✅ Core 1 entry + lcd_task (데모 포팅)
+├── tasks/                    ✅ Core 1 FreeRTOS tasks
+│   ├── core1_entry.[ch]      ✅ LCD init + task create + vTaskStartScheduler
+│   ├── lcd_task.[ch]         ✅ 10 Hz 렌더
+│   └── pwm_task.[ch]         ✅ buck PWM init + duty sweep 데모
 └── port/
     ├── pico/                 ✅ Pico HAL 구현
-    │   ├── board_config.h    - 핀, SPI baud, Vop 값
+    │   ├── board_config.h    - LCD 핀, Vop, BUCK PWM 핀/주파수
     │   ├── hal_spi_pico.c
     │   ├── hal_gpio_pico.c
-    │   └── hal_delay_pico.c
+    │   ├── hal_delay_pico.c
+    │   └── hal_pwm_pico.c    ✅ NEW
     └── mkv31/                ⏳ 향후 이식 (README만 있음)
 ```
 
@@ -274,21 +292,36 @@ I_dchg_max = min(VBAT / 2.5, 4.0);  /* dump load 2.5 Ω, 안전 4 A */
 
 ---
 
-## 10. 듀얼 코어 분담 (확정, Phase 5에서 구현)
+## 10. 듀얼 코어 분담 (현재 상태 + Phase 5 목표)
 
 **Core 0 = bare-metal**, **Core 1 = FreeRTOS (single-core scheduler)**
 
+### 현재 (Phase 5 일부 구현)
+```
+Core 0 (bare-metal)             Core 1 (FreeRTOS)
+└─ stdio + multicore_launch      ├─ lcd_task    ✅ (10 Hz 렌더)
+   └─ while(1) __wfi()            └─ pwm_task    ✅ (buck init + duty sweep)
+                                      └─ buck_pwm_set_duty → HW PWM slice 0
+```
+
+Core 0는 아직 아무 실시간 일을 하지 않음. PWM HW는 Core 1이 `buck_pwm_set_duty()`를 호출해서 slice 레지스터를 쓰면 HW가 자율 동작.
+
+### Phase 5 완성 후 목표
 ```
 Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
-├─ PWM HW 85 kHz                ├─ lcd_task    (10 Hz)
-├─ ADC DMA + 평균               ├─ bms_task    (1 Hz, BQ34Z100)
-├─ 8.5 kHz 컨트롤 ISR          ├─ settings_task (EEPROM)
-├─ CC/CV 모드 전환              ├─ input_task   (버튼)
+├─ ADC DMA + 평균               ├─ lcd_task    (10 Hz)
+├─ 8.5 kHz 컨트롤 ISR          ├─ bms_task    (1 Hz, BQ34Z100)
+├─ PI + CC/CV 모드 전환         ├─ settings_task (EEPROM)
+├─ buck_pwm_set_duty() 호출     ├─ input_task   (버튼)
 ├─ 안전 (OCP/OVP)              ├─ learn_task   (학습 머신)
 ├─ 하드 OCP NMI                 ├─ uart_task    (UART1 외부 통신)
-└─ FreeRTOS API 호출 금지        ├─ log_task     (USB CDC)
-                                 └─ idle hook
+└─ FreeRTOS API 호출 금지       └─ log_task     (USB CDC)
 ```
+
+**이동 작업 (Phase 5에서)**:
+- `pwm_task`의 sweep 로직 제거, 대신 Core 0 컨트롤 ISR이 `buck_pwm_set_duty()`를 직접 호출
+- `hal_pwm` / `buck_pwm` 계층은 변경 없음 (core-agnostic)
+- `pwm_task`는 제거하거나 단순 init만 수행하는 setup task로 축소
 
 ### Pico SDK + FreeRTOS 통합
 - FreeRTOS-Kernel: https://github.com/raspberrypi/FreeRTOS-Kernel
@@ -311,14 +344,16 @@ Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
 
 ## 11. 다음 작업 순서 (제안)
 
-| 우선순위 | Phase | 작업 | 예상 시간 |
+| 우선순위 | Phase | 작업 | 상태 |
 |---|---|---|---|
-| 1 | **Phase 2** | SDK 2.x 설치 + Pico 2 마이그레이션 (FreeRTOS는 자동 포트 전환) | 1~2 시간 |
-| 2 | **Phase 3** | HAL 확장 (`hal_pwm`, `hal_adc`, `hal_i2c`, `hal_uart`) | 3~4 시간 |
-| 3 | **Phase 4** | AD7606 SPI+DMA 드라이버 + ring buffer + 평균 | 4~6 시간 |
-| 3 | **Phase 4** | PWM 85 kHz 두 슬라이스 셋업 | 2 시간 |
+| ✅ | **Phase 1** | LCD 드라이버 + 7 페이지 UI + 10 Hz 렌더 | **완료** |
+| ✅ | **Phase 5 일부** | FreeRTOS Core 1 포팅 + `lcd_task` | **완료** |
+| ✅ | **Phase 4 일부** | PWM HAL + `buck_pwm` + `pwm_task` (85 kHz) | **완료** |
+| 1 | **Phase 2** | SDK 2.x 설치 + Pico 2 마이그레이션 (FreeRTOS 자동 포트 전환) | 1~2 시간 |
+| 2 | **Phase 3** | HAL 나머지 (`hal_adc`, `hal_i2c`, `hal_uart`) | 2~3 시간 |
+| 3 | **Phase 4 나머지** | AD7606 SPI+DMA 드라이버 + ring buffer + 평균 | 4~6 시간 |
 | 4 | **Phase 7a** | 24LC256 EEPROM 드라이버 + settings 모듈 | 3~4 시간 |
-| 5 | **Phase 5** | PI 컨트롤러 + CC/CV 머신 + Core 0 타이머 ISR (FreeRTOS는 이미 포팅됨) | 6~10 시간 |
+| 5 | **Phase 5 나머지** | PI 컨트롤러 + CC/CV 머신 + Core 0 8.5 kHz ISR | 6~10 시간 |
 | 6 | **Phase 6** | SW OCP/OVP/OTP + watchdog (HW OCP는 보드측) | 2~3 시간 |
 | 7 | **Phase 7b** | BQ34Z100 I²C 드라이버 | 4~6 시간 |
 | 8 | **Phase 8** | 학습 사이클 상태 머신 | 4~6 시간 |
