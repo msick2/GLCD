@@ -1,6 +1,6 @@
 # 프로젝트 메모리 (세션 인계용)
 
-마지막 업데이트: 2026-04-11 (FreeRTOS Core 1 포팅 완료)
+마지막 업데이트: 2026-04-11 (Phase 2 SDK 2.x + Pico 1/2 듀얼 타겟 완료)
 GitHub: https://github.com/msick2/GLCD
 
 이 문서는 다른 세션에서 작업을 이어받을 수 있도록 정리한 핸드오프 노트입니다.
@@ -10,7 +10,7 @@ GitHub: https://github.com/msick2/GLCD
 
 ## 1. 한 줄 요약
 
-BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LCD/UI) 완료**, Pico 1 (RP2040) + ST75256 4-gray LCD에서 데모 동작. 다음 단계는 Phase 2 (Pico 2 마이그레이션) 또는 Phase 3 (HAL 확장).
+BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. **Phase 1 (LCD/UI) + Phase 2 (SDK 2.x 듀얼 타겟) + Phase 5 일부 (FreeRTOS Core 1) + Phase 4 일부 (PWM HAL + buck_pwm + pwm_task)** 완료. `build-v2.cmd pico` / `build-v2.cmd pico2` 모두 빌드 성공. Pico 1 실기에서 LCD 데모 + 85 kHz PWM 듀티 sweep 동작 중. Pico 2 UF2도 준비됨 (보드 도착 시 바로 굽기). 다음: AD7606 (ADC) 또는 Core 0 컨트롤 루프 ISR.
 
 ---
 
