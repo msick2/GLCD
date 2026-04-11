@@ -1,7 +1,11 @@
 # 프로젝트 메모리 (세션 인계용)
 
-마지막 업데이트: 2026-04-11 (Phase 2 SDK 2.x + Pico 1/2 듀얼 타겟 완료)
-GitHub: https://github.com/msick2/GLCD
+마지막 업데이트: 2026-04-11 (**프로젝트 종료 — MKV31F512로 이전 결정**)
+GitHub: https://github.com/msick2/GLCD (Pico 레퍼런스 아카이브)
+
+> **이 repo는 여기서 "완성" 상태로 동결됩니다.**
+> 이후 개발은 **새 프로젝트 / 새 세션**에서 **MKV31F512** 타겟으로 진행합니다.
+> 새 세션 핸드오프는 [mkv31_migration.md](mkv31_migration.md) 전체 문서를 참조하세요.
 
 이 문서는 다른 세션에서 작업을 이어받을 수 있도록 정리한 핸드오프 노트입니다.
 설계의 "왜"는 [design_guide.md](design_guide.md)에 있고, 이 문서는 "어디까지 했고, 다음에 뭐 할지"에 집중합니다.
@@ -10,7 +14,20 @@ GitHub: https://github.com/msick2/GLCD
 
 ## 1. 한 줄 요약
 
-BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. **Phase 1 (LCD/UI) + Phase 2 (SDK 2.x 듀얼 타겟) + Phase 5 일부 (FreeRTOS Core 1) + Phase 4 일부 (PWM HAL + buck_pwm + pwm_task)** 완료. `build-v2.cmd pico` / `build-v2.cmd pico2` 모두 빌드 성공. Pico 1 실기에서 LCD 데모 + 85 kHz PWM 듀티 sweep 동작 중. Pico 2 UF2도 준비됨 (보드 도착 시 바로 굽기). 다음: AD7606 (ADC) 또는 Core 0 컨트롤 루프 ISR.
+BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. **Pico (RP2040/RP2350) 에서 LCD/UI/FreeRTOS/PWM까지 완성**. 그러나 **실 제품 MCU는 MKV31F512VLH12로 변경 확정** (LQFP-64, 120 MHz, M4+FPU, 내장 16-bit ADC × 2, FlexTimer). 이 Pico 프로젝트는 **레퍼런스 / 재사용 소스 아카이브**로 역할 전환. 다음 세션은 **새 프로젝트**에서 MKV31 기반으로 시작하고, `src/lcd/`, `src/ui/`, `src/pwm/`, `src/freertos_config/`, `src/tasks/` 등을 그대로 복사해서 재사용. 핸드오프 문서: [mkv31_migration.md](mkv31_migration.md).
+
+---
+
+## 1b. 새 세션 시작 가이드 (중요)
+
+**새 세션을 여는 사람을 위한 메시지**:
+
+1. 이 repo (`msick2/GLCD`)는 **Pico 기반 레퍼런스**입니다. 실제 제품은 MKV31F512로 만듭니다.
+2. 반드시 먼저 읽을 문서: **[mkv31_migration.md](mkv31_migration.md)**
+3. 그 문서에 Checkpoint 1~10 순서가 있습니다. 1번부터 차례로 진행하세요.
+4. 이 repo의 `src/lcd/`, `src/ui/`, `src/pwm/`, `src/freertos_config/`, `src/tasks/`, `src/hal/hal_*.h`는 **그대로 복사**합니다. MCU-specific 코드는 `src/port/pico/` 안에만 있으므로 거기만 버리면 됩니다.
+5. 새 프로젝트 폴더를 만들고 이 파일들을 복사한 뒤, `src/port/mkv31/`을 새로 작성하는 것이 핵심 작업입니다.
+6. MCUXpresso IDE로 먼저 빈 프로젝트 + Config Tool로 클럭/핀 설정 → 그 결과물을 CMake + VS Code 환경으로 이전 → 이 repo의 재사용 소스 통합 → 차례로 checkpoint 달성.
 
 ---
 
@@ -80,7 +97,11 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. **Phase 1 (LCD/UI) +
 
 | 카테고리 | 부품 | 비고 |
 |---|---|---|
-| **MCU** | **Raspberry Pi Pico 2 (RP2350)** | 현재 코드는 Pico 1으로 빌드, Phase 2에서 Pico 2로 마이그레이션 |
+| **MCU (실 제품)** | **NXP MKV31F512VLH12** | LQFP-64, 120 MHz, M4+FPU, 4 MHz 크리스탈, USB 없음 |
+| MCU (이 repo 아카이브) | ~~Raspberry Pi Pico 2 (RP2350)~~ | 레퍼런스만, 실 제품에는 미사용 |
+| ADC | **MKV31 내장 16-bit × 2** (외장 없음) | AD7606 제거, FlexTimer 하드웨어 트리거 |
+| ADC Vref | **REF3030AIDBZT** (3.0 V, ±0.2%) | VREFH 외부 레퍼런스 |
+| 디버거 | **J-Link** (사용자 보유) | SWD, UART VCOM 디버그 |
 | **LCD** | JLX256160G-680 (ST75256) | 256×160 4-gray, 동작 검증 완료 |
 | **ADC** | AD7606BSTZ | 16-bit, 8 ch simultaneous, ±10 V |
 | **전류 센서** | ACS725LLCTR-10AU-S × 3 | 0~10 A, 5 V 공급, 200 mV/A, 0.5 V offset |
@@ -379,7 +400,9 @@ Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
 | ✅ | **Phase 2** | SDK 2.1.1 + Pico 1/2 듀얼 타겟 빌드 | **완료** |
 | ✅ | **Phase 5 일부** | FreeRTOS Core 1 포팅 + `lcd_task` | **완료** |
 | ✅ | **Phase 4 일부** | PWM HAL + `buck_pwm` + `pwm_task` (85 kHz) | **완료** |
-| 1 | **Phase 3** | HAL 나머지 (`hal_adc`, `hal_i2c`, `hal_uart`) | 2~3 시간 |
+| 🔒 | (**Pico 프로젝트 종결**) | MCU를 MKV31로 변경, 이 repo는 레퍼런스로 동결 | — |
+| ⭐ | **Phase 11** | **새 세션 — MKV31F512 이식**: [mkv31_migration.md](mkv31_migration.md) Checkpoint 1~10 | **다음 세션에서 시작** |
+| 참고 | **Phase 3** | HAL 나머지 (`hal_adc`, `hal_i2c`, `hal_uart`) — MKV31 포트에서 작성 | Phase 11 내부 작업 |
 | 3 | **Phase 4 나머지** | AD7606 SPI+DMA 드라이버 + ring buffer + 평균 | 4~6 시간 |
 | 4 | **Phase 7a** | 24LC256 EEPROM 드라이버 + settings 모듈 | 3~4 시간 |
 | 5 | **Phase 5 나머지** | PI 컨트롤러 + CC/CV 머신 + Core 0 8.5 kHz ISR | 6~10 시간 |

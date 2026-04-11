@@ -53,38 +53,88 @@ BQ34Z100 같은 퓨얼게이지 IC의 학습 사이클(Capacity learning, OCV/RA
 
 ---
 
-## 3. MCU 선정 ✅ Raspberry Pi Pico 2 (RP2350) 확정
+## 3. MCU 선정 ✅ **NXP MKV31F512VLH12 확정 (실 제품)**
 
 | 항목 | 값 |
 |---|---|
-| 보드 | Raspberry Pi Pico 2 |
-| 칩 | RP2350 |
-| 코어 | Dual Cortex-M33 @ 150 MHz (300 MHz 부스트 가능) |
-| FPU | **있음** (FPv5-SP, 단정도) — float 1~14 cycle |
-| SRAM | 520 KB |
-| 플래시 | 4 MB |
-| PWM 슬라이스 | 12 |
-| GPIO | 30 (RP2040과 동일) |
-| ADC | 4 ch + 온도 (내장, 사용 안 함) |
-| SDK | Pico SDK 2.x 필요 |
+| 부품 | **MKV31F512VLH12** |
+| 패키지 | **LQFP-64** |
+| 코어 | Cortex-M4 + FPU (단정도, DSP instructions) |
+| 클럭 | **120 MHz** |
+| 플래시 | 512 KB |
+| SRAM | 96 KB (64+32) |
+| FPU | **있음** (FPv4-SP, 단정도) |
+| ADC | **2× 16-bit SAR** (각 최대 ~818 kSPS, differential 지원) |
+| PWM | **FlexTimer 4개** (eFlexPWM 포함, ADC 트리거 내장) |
+| DSPI | 3개 |
+| I²C | 2~3개 |
+| UART | LPUART + UART |
+| USB | **없음** (UART↔J-Link VCOM으로 디버그) |
+| 크리스탈 | 4 MHz 외부 (MCG PLL → 120 MHz) |
+| 디버거 | **J-Link** (사용자 보유) |
 
-### 업그레이드 영향
-- 현재 LCD/UI 코드는 HAL 분리 덕분에 거의 그대로 작동
-- `CMakeLists.txt`에서 `set(PICO_BOARD pico2)` + `PICO_PLATFORM rp2350` 변경
-- pico-setup-windows v1.5.1 → SDK 2.x 재설치 (VS Code Pico 확장 권장)
-- 핀 매핑은 RP2040과 거의 동일
+### 왜 MKV31F512인가
+- **Kinetis V 시리즈는 모터/전력 제어 특화** — FlexTimer가 PWM과 ADC를 하드웨어 레벨에서 동기화. 벅 컨버터 컨트롤에 이상적.
+- **내장 16-bit ADC × 2** — AD7606 외장 ADC 불필요, BOM ~$15 절감
+- **Cortex-M4 FPU** — float 컨트롤 루프 자유
+- **J-Link 디버깅** — 공식 지원
 
-### Pico 2의 장점 (이 프로젝트 관점)
-- **컨트롤 루프 float 자유**: PI/PID 계산이 1~14 cycle, 8.5 kHz 컨트롤 루프 CPU 사용률 < 5%
-- **더 큰 SRAM**: 측정 ring buffer, 학습 로그, 큰 폰트 등 여유
-- **NVIC 256 우선순위**: 안전 인터럽트(OCP)를 컨트롤 루프 위에 깔끔하게 배치
-- **향후 확장**: 셀 수 증가, 채널 수 증가, 알고리즘 복잡화 모두 대응
+### Pico는 레퍼런스/시뮬레이터로 남김
+- 현재까지 Pico로 개발한 LCD/UI/PWM/FreeRTOS 코드 (git 저장소 `msick2/GLCD`)는 실제 제품에는 들어가지 않음
+- HAL 분리 구조 덕분에 `src/lcd/`, `src/ui/`, `src/pwm/`, `src/tasks/`, `src/freertos_config/`는 MKV31으로 그대로 이식
+- 새 프로젝트에서 `src/port/mkv31/` 를 새로 작성 (SDK: MCUXpresso SDK for MKV31F51212)
+
+### 개발 환경
+- **초기 셋업**: MCUXpresso IDE로 빈 MKV31 프로젝트 생성 (클럭/핀 Config Tool 활용)
+- **정식 개발**: MCUXpresso SDK만 추출 → **CMake + VS Code** 환경으로 전환
+- **디버거**: J-Link (보유)
+- **통신**: UART를 J-Link VCOM에 연결 → PC에서 COM 포트로 디버그 로그
 
 ---
 
-## 4. 듀얼 코어 분담 (확정)
+## 4. 싱글 코어 아키텍처 (MKV31 기준, 변경)
 
-**Core 0 = bare-metal (RT)**, **Core 1 = FreeRTOS (UI/Comms)**
+> **이전 계획**: Pico의 Core 0 bare-metal + Core 1 FreeRTOS 듀얼 코어 분담
+> **현재 (MKV31)**: MKV31F512는 **싱글 코어** (Cortex-M4). 따라서 단일 코어 FreeRTOS로 통일.
+> 실시간 컨트롤 루프는 **인터럽트 우선순위**로 task보다 위에 배치 (M4 NVIC 256 우선순위 활용).
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ MKV31 Cortex-M4 @ 120 MHz                                │
+│                                                          │
+│ [최고 우선순위 ISR]                                      │
+│   FlexTimer wrap → ADC trigger → ADC ISR (8.5 kHz)       │
+│     - ADC 6 ch 평균, PI 컨트롤, PWM duty 갱신            │
+│   OCP hardware fault (NMI 또는 최고우선 IRQ)             │
+│                                                          │
+│ [FreeRTOS scheduler]                                     │
+│   lcd_task    (10 Hz 렌더, priority 3)                   │
+│   bms_task    (1 Hz, BQ34Z100 I²C)                       │
+│   settings_task (EEPROM I²C)                             │
+│   input_task   (버튼 폴링)                               │
+│   learn_task   (학습 사이클 상태 머신)                   │
+│   uart_task    (UART1 외부 통신)                         │
+│   log_task     (UART debug output, J-Link VCOM 경유)     │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 데이터 교환 (단순화)
+- ISR → task: **volatile measurement snapshot struct** (단일 코어라 더블 버퍼 불필요, irq-disable critical section만)
+- task → ISR: **volatile setpoint struct** (마찬가지)
+- FreeRTOS queue는 task 간 통신용
+
+### 인터럽트 우선순위 배치
+- **우선순위 0 (최고)**: OCP NMI (하드웨어 차단은 이미 됐지만 상태 기록 + 소프트웨어 알림)
+- **우선순위 1**: ADC 완료 인터럽트 (8.5 kHz 컨트롤 루프 본체)
+- **우선순위 2~4**: 통신 인터럽트 (DSPI, I²C, UART DMA 완료)
+- **우선순위 ≥ 5 (`configMAX_SYSCALL_INTERRUPT_PRIORITY` 이상)**: FreeRTOS가 관리하는 tick + task 전환
+
+→ **우선순위 0~1의 ISR에서는 FreeRTOS API 호출 금지** (Queue/Semaphore 사용 불가, 직접 공유 변수만).
+
+### 금지 사항
+- 컨트롤 ISR에서 `printf`, `malloc`, 긴 I²C/SPI 대기 금지
+- 공유 가변 데이터는 `volatile` + short critical section
+- DMA 채널은 주변기기별로 명확히 분리
 
 ```
 ┌──────────────────────────┐  shared mem  ┌──────────────────────────────┐
@@ -163,30 +213,72 @@ BQ34Z100 같은 퓨얼게이지 IC의 학습 사이클(Capacity learning, OCV/RA
 
 ---
 
-## 6. ADC: AD7606
+## 6. ADC: MKV31F512 내장 16-bit SAR × 2 (변경)
+
+> **이전**: 외장 AD7606 (~$15)
+> **현재**: MKV31F512 **내장 ADC 2개** (ADC0 + ADC1), BOM 추가 비용 0
 
 | 항목 | 값 |
 |---|---|
-| 분해능 | 16-bit |
-| 채널 수 | 8 (6 사용, 2 예비) |
-| 샘플링 | **Simultaneous** (각 채널 독립 T/H) |
-| 속도 | 200 kSPS / 채널 |
-| 입력 범위 | ±10 V (소프트웨어 선택, ±5 V도 가능) |
-| 인터페이스 | SPI 또는 parallel — SPI 사용 |
-| 트리거 | CONVST 핀 (PWM과 동기 가능) |
-| BUSY 핀 | 변환 완료 신호 |
-| 가격 | ~$15 |
+| 분해능 | **16-bit SAR** (12/13/16-bit 선택) |
+| 채널 수 | ADC0/ADC1 각각 ~24 입력 (external + internal) |
+| 샘플링 | ADC0/ADC1 **동시 샘플링** (2채널 simultaneous) |
+| 속도 | ~818 kSPS @ 16-bit |
+| 입력 범위 | 0 ~ VREFH (외부 Vref 핀, 보통 3.3 V 또는 정밀 레퍼런스) |
+| 트리거 | **FlexTimer 하드웨어 트리거** (PWM과 완전 동기) |
+| PGA | 내장 PGA (선택적, 1~64× gain) |
+| DMA | ADC 완료 시 DMA transfer 가능 |
+| 가격 | **내장, 추가 비용 0** |
 
-### 왜 AD7606인가
-- ±10 V 직접 입력 → 분압비 작아도 됨 → 저항 매칭 오차 최소화
-- 모든 채널 동일 시점 샘플링 → V × I 곱(전력) 정확
-- 입력 임피던스 1 MΩ → 외부 버퍼 op-amp 불필요
-- 산업 표준, 라이브러리/예제 풍부
-- Hall 센서가 ground-referenced 신호라 PGA 불필요 (ADS131M06의 24-bit이 무용지물)
+### 외부 Vref
+MKV31 내장 ADC 정확도를 최대로 뽑으려면 **외부 정밀 레퍼런스** 권장:
+- **REF3030AIDBZT** (3.0 V, ±0.2%, 50 ppm/°C) — Vref 3.0 V 기준 LSB = 45.8 µV (16-bit)
+- 또는 **REF3033** (3.3 V) — VDDA와 같은 값이라 풀-스케일 사용
+- 내부 Vref 사용 시 정확도는 VDDA LDO에 의존 (~±2%)
 
-### 채널 사용 분담 (PGA 1× 균등)
-- 4 voltage 채널: 분압된 0~10 V
-- 2 current 채널: Hall 0~2.2 V (Vref 5 V 모드 사용)
+### 채널 배치 (제안, ADC0 + ADC1 동시 샘플)
+
+| ADC | 채널 | 신호 | Front-end |
+|---|---|---|---|
+| **ADC0** | ch? | **I_CHG** (Hall) | 직결 + RC LPF |
+|  | ch? | **VBAT** (배터리) | 10:1 분압 |
+|  | ch? | **VIN** (48V 입력) | 16:1 분압 |
+| **ADC1** | ch? | **I_DCHG** (Hall) | 직결 + RC LPF |
+|  | ch? | **VLOAD** (부하) | 10:1 분압 |
+|  | ch? | **IIN** (입력) | 직결 + RC LPF |
+|  | ch? | (예비) T_FET NTC 등 | — |
+
+**왜 이렇게 배치?**: I_CHG와 VBAT, I_DCHG와 VLOAD를 각각 같은 순간에 샘플해서 **정확한 전력 계산** (`P = V × I`).
+
+### 분해능 (Vref = 3.0 V, REF3030)
+- LSB (16-bit) = 3.0 / 65536 = **45.8 µV**
+- **VIN 48V** (16:1 분압): 입력 환산 LSB = **733 µV** (0.73 mV)
+- **VBAT 30V** (10:1): 입력 환산 LSB = **458 µV**
+- **Hall (200 mV/A)**: 입력 환산 LSB = **0.23 mA**
+- 오버샘플링 16 샘플 평균 적용 시 effective resolution ~18-bit:
+  - 전압 LSB → **0.18 mV** (VIN), 0.11 mV (VBAT)
+  - 전류 LSB → **0.057 mA**
+- **목표 (전압 10 mV, 전류 10 mA)를 크게 초과 달성**
+
+### FlexTimer와 ADC 하드웨어 동기 (MKV31의 강점)
+```
+FlexTimer PWM 85 kHz
+    │
+    ├─ duty 갱신
+    │
+    └─ INIT_TRIG / EXT_TRIG → ADC0 + ADC1 동시 변환 시작
+                                 │
+                                 ▼ (~1.5 µs 후)
+                            DMA → RAM (ring buffer)
+                                 │
+                                 ▼
+                         ADC 완료 ISR (8.5 kHz, 10 샘플마다)
+                                 │
+                                 ▼
+                         평균 + PI + PWM duty 갱신
+```
+
+CPU 개입 없이 PWM 트리거 → ADC 변환 → DMA가 자동 진행. CPU는 10 PWM 사이클마다 1번(=8.5 kHz)만 깨어나 평균/PI/duty 계산.
 
 ---
 
@@ -621,42 +713,40 @@ EEPROM은 외부 칩이라 플래시처럼 XIP 중단 문제가 없습니다. **
 
 ---
 
-## 13. 핀 할당 (제안)
+## 13. 핀 할당 (MKV31F512VLH12 LQFP-64 기준, TBD)
 
-| GPIO | 용도 | 비고 |
-|---|---|---|
-| GP0 | 충전 PWM (PWM0A) | 85 kHz |
-| GP1 | 방전 PWM (PWM0B) | 85 kHz, 동일 슬라이스 또는 별개 |
-| GP2 | 충전 enable (gate driver EN) | 안전 차단용 |
-| GP3 | 방전 enable | 안전 차단용 |
-| GP4 | I²C0 SDA | BQ34Z100 (외부 보드, 케이블) |
-| GP5 | I²C0 SCL | BQ34Z100 |
-| GP6 | I²C1 SDA | **24LC256 EEPROM (로컬)** |
-| GP7 | I²C1 SCL | EEPROM |
-| GP8 | **UART1 TX** | 외부 통신 |
-| GP9 | **UART1 RX** | 외부 통신 |
-| GP10 | SPI1 SCK | AD7606 |
-| GP11 | SPI1 TX | AD7606 |
-| GP12 | SPI1 RX | AD7606 |
-| GP13 | SPI1 CS | AD7606 |
-| GP14 | AD7606 CONVST | PWM 동기 트리거 |
-| GP15 | AD7606 BUSY | 변환 완료 |
-| GP16 | LCD RST | 사용 중 |
-| GP17 | LCD CS | 사용 중 |
-| GP18 | LCD SCK (SPI0) | 사용 중 |
-| GP19 | LCD MOSI (SPI0) | 사용 중 |
-| GP20 | 버튼 DOWN | |
-| GP21 | 버튼 LEFT | |
-| GP22 | LCD DC (RS) | 사용 중 |
-| GP23 | 버튼 RIGHT | |
-| GP24 | OCP fault input | SR 래치 Q 모니터 |
-| GP26 | OCP latch RESET | 래치 클리어 (active high pulse) |
-| GP25 | LED (Pico 내장) | 사용 중 |
-| GP27 | **버튼 TAB** | 풀업 (이동: GP8 → GP27) |
-| GP28 | **버튼 UP** | 풀업 (이동: GP9 → GP28) |
-| GP29 | VSYS 측정 (Pico 내장) | |
+> **상태**: Pico GPIO 매핑은 레퍼런스로만 남겨둡니다. 실제 MKV31 핀 할당은 MCUXpresso Config Tool에서 결정합니다. 아래는 **필요한 신호 목록**만 정리합니다.
 
-핀 부족하면 PCB에서 일부 재배치 가능. 25 / 26 GPIO 사용.
+### 필요한 신호 (약 30개)
+
+| 카테고리 | 신호 | 수량 | 주변기기 매핑 후보 |
+|---|---|---|---|
+| LCD (SPI) | SCK, MOSI, CS, DC, RST | 5 | DSPI0 |
+| Buck PWM | 충전, 방전 | 2 | **FlexTimer (FTM0 channel A/B 권장)** |
+| Buck enable | 충전 EN, 방전 EN | 2 | GPIO |
+| ADC 입력 | VIN, IIN, VBAT, I_CHG, I_DCHG, VLOAD | 6 | **ADC0 + ADC1 분산** |
+| Vref 외부 | VREFH | 1 | 전용 핀 |
+| I²C0 | SDA, SCL | 2 | I2C0 (BQ34Z100) |
+| I²C1 | SDA, SCL | 2 | I2C1 (24LC256 EEPROM) |
+| UART | TX, RX | 2 | LPUART0 또는 UART1 → J-Link VCOM |
+| 버튼 | TAB/UP/DOWN/LEFT/RIGHT | 5 | GPIO + 내부 풀업 |
+| OCP | fault in, latch reset | 2 | GPIO (fault는 인터럽트 가능 핀) |
+| LED | 상태 LED | 1~2 | GPIO |
+| 디버그 | SWD_CLK, SWD_DIO, RESET | 3 | 전용 |
+| 크리스탈 | XTAL0, EXTAL0 | 2 | 전용 (4 MHz) |
+| 전원 | VDD, VDDA, VSS, VSSA, VREFL | ~6 | 전용 |
+
+**총 요구 핀**: 약 41개 (GPIO + 전용) → LQFP-64 여유 있음
+
+### 핀 할당 결정 순서 (새 세션에서)
+1. **고정 핀 먼저 제외**: 전원, 크리스탈, SWD, RESET, VREFH
+2. **ADC 후보**: PTB0~PTB11, PTC0~PTC2 등 ADC-capable 핀만
+3. **FlexTimer 채널**: FTM0_CH0~CH7은 특정 PTA/PTC 핀에만 연결 가능
+4. **DSPI/UART/I²C**: alternate mux에 따라 여러 선택지 있음
+5. **나머지 GPIO**: 버튼, enable, OCP 등에 배치
+6. **MCUXpresso Pin Mux Tool** 로 GUI에서 검증
+
+PCB 설계 시 이 순서로 핀 맵을 확정하고 완료 후 이 표를 업데이트.
 
 ---
 
@@ -815,14 +905,18 @@ typedef struct {
 
 | 카테고리 | 부품 | 수량 | 용도 | 비고 |
 |---|---|---|---|---|
-| **MCU** | **Raspberry Pi Pico 2 (RP2350)** | 1 | 메인 컨트롤러 | ✅ 확정 |
+| **MCU** | **NXP MKV31F512VLH12** | 1 | 메인 컨트롤러 | LQFP-64, 120 MHz, M4+FPU |
+| 크리스탈 | **4 MHz** | 1 | MCG PLL 소스 → 120 MHz | 22 pF 로드 캡 × 2 |
+| 외부 Vref | **REF3030AIDBZT** | 1 | ADC VREFH 3.0 V 정밀 | ±0.2%, 50 ppm/°C |
+| ~~외장 ADC~~ | ~~AD7606~~ | 0 | **MKV31 내장 ADC 사용** | 제거됨 |
 | LCD | JLX256160G-680 (ST75256) | 1 | 256×160 4-gray | 이미 보유 |
-| ADC | AD7606BSTZ | 1 | 8 ch 16-bit simultaneous | |
-| **전류 센서** | **ACS725LLCTR-10AU-S** | **3** | IIN, I_CHG, I_DCHG | **5 V 공급, 0.5 V offset** |
+| **전류 센서** | **ACS725LLCTR-10AU-S** | **3** | IIN, I_CHG, I_DCHG | 5 V 공급, 0.5 V offset |
 | **EEPROM** | **24LC256-I/SN** | **1** | 설정 + 캘리브레이션 저장 | I²C1, 32 KB, 1M cycles |
 | 정밀 분압 저항 | 0.1% 박막 | 8쌍 | VIN, VBAT, VLOAD 분압 + 예비 | 매칭 페어 |
 | 노이즈 필터 | 1 nF C0G + 100 Ω | 6 | ADC 입력 RC LPF | |
 | I²C 풀업 저항 | 4.7 kΩ × 4 | 1 | I²C0 + I²C1 SDA/SCL 풀업 | |
+| SWD 커넥터 | 10-pin 1.27 mm 또는 20-pin 2.54 mm | 1 | J-Link 연결 | |
+| UART↔J-Link | J-Link VCOM으로 직결 또는 외부 CP2102 | 1 | 디버그 로그 | UART1 TX/RX |
 
 ### 15.2 충전 벅 (×1)
 
@@ -1003,11 +1097,20 @@ typedef struct {
 - [ ] UI 입력 디스패처
 - [ ] 데모 자동 순환 → 실제 입력 모드 전환
 
-### Phase 11 — MKV31 이식 (먼 미래)
-- [ ] `port/mkv31/` 디렉터리 채우기
-- [ ] KSDK 또는 베어메탈 SPI/I²C/PWM/ADC
-- [ ] CMakeLists / linker script
-- [ ] 동작 검증
+### Phase 11 — MKV31 이식 ⭐ **새 프로젝트 / 새 세션에서 시작**
+- [ ] **PCB 설계** (MKV31F512VLH12 + 48V 입력 + 2 벅 + LCD + BQ34Z100 커넥터 등)
+- [ ] MCUXpresso SDK 다운로드 (MKV31F51212)
+- [ ] MCUXpresso IDE로 빈 프로젝트 생성 (클럭/핀 Config Tool 활용, 4 MHz crystal → 120 MHz)
+- [ ] CMake + VS Code 환경으로 전환 (우리 build 구조와 통합)
+- [ ] J-Link 디버깅 셋업
+- [ ] `src/port/mkv31/` 구조 작성 (board_config.h, hal_*_mkv31.c)
+- [ ] Pico git repo에서 공통 코드 복사: `src/lcd/`, `src/ui/`, `src/pwm/`, `src/freertos_config/`, `src/tasks/`
+- [ ] FreeRTOS port를 `GCC/ARM_CM4F`로 변경
+- [ ] HAL 구현 채우기: DSPI, GPIO, delay, FlexTimer PWM, ADC0/1, I2C, UART
+- [ ] LCD 동작 확인 → UI 데모 확인 → PWM 출력 확인 → ADC 측정 확인
+- [ ] 컨트롤 루프 + 학습 사이클 구현 (기존 Phase 5~9 내용을 MKV31 위에서)
+
+**상세 핸드오프는 [docs/mkv31_migration.md](mkv31_migration.md) 참조.**
 
 ---
 
@@ -1040,3 +1143,4 @@ typedef struct {
 | 2026-04-11 | FreeRTOS-Kernel 통합 완료 (Raspberry Pi fork, FetchContent). Core 1 FreeRTOS scheduler 동작. lcd_task가 기존 데모 루프를 대체. 바이너리 50 KB → 100 KB. |
 | 2026-04-11 | PWM 제어 계층 구현: hal_pwm + buck_pwm 모듈 + pwm_task. GP0/GP1이 85 kHz slice 0 A/B에서 듀티 sweep. board_config.h에 BUCK_*_PWM_PIN, BUCK_PWM_FREQ_HZ 추가. |
 | 2026-04-11 | Phase 2 완료: Pico SDK 2.1.1 + picotool 2.2.0 설치 (E:/pico-sdk-2), pico-env-v2.cmd + build-v2.cmd 래퍼 추가. FreeRTOSConfig.h에 M33 매크로 4개 추가. `build-v2.cmd pico` 와 `build-v2.cmd pico2` 둘 다 빌드 성공 (RP2040 102 KB, RP2350 96 KB UF2). 기존 GCC 10.3 재사용. |
+| 2026-04-11 | **MCU를 MKV31F512VLH12로 변경 확정**. LQFP-64, 120 MHz, M4+FPU, 내장 16-bit ADC × 2, FlexTimer PWM, 외부 4 MHz 크리스탈. USB 없음 → UART↔J-Link VCOM으로 디버그. Pico 코드는 레퍼런스로 git repo에 보존. 다음 작업은 **새 PCB 설계 + 새 펌웨어 프로젝트** (새 세션). 이 repo는 LCD/UI/FreeRTOS/PWM 레퍼런스 아카이브 역할. 상세 핸드오프는 docs/mkv31_migration.md 참조. |
