@@ -1,4 +1,6 @@
 build/
+build-v2-pico/
+build-v2-pico2/
 .cache/
 _deps/
 *.o

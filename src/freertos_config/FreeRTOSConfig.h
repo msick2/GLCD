@@ -79,6 +79,14 @@
 #define configKERNEL_INTERRUPT_PRIORITY         (1 << 6)   /* lowest priority */
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY    0          /* not used on M0+ */
 
+/* ----- Cortex-M33 specific (RP2350 / Pico 2) -----
+ * These macros are required by the RP2350_ARM_NTZ port and ignored by the
+ * RP2040 (M0+) port, so it is safe to define them unconditionally. */
+#define configENABLE_FPU                        1   /* use the single-precision FPU */
+#define configENABLE_MPU                        0   /* MPU not used */
+#define configENABLE_TRUSTZONE                  0   /* non-secure only (NTZ port) */
+#define configRUN_FREERTOS_SECURE_ONLY          1   /* run entirely in non-secure world */
+
 /* ----- Asserts -----
  * Use portDISABLE_INTERRUPTS (not task-level) because configASSERT is
  * expanded inside portmacro.h before task.h has been included. */
