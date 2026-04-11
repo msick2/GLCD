@@ -927,11 +927,16 @@ typedef struct {
 - [x] 7 페이지 UI 데모 (시뮬 데이터)
 - [x] 10 Hz 갱신 + 프레임 카운터
 
-### Phase 2 — MCU 업그레이드 (확정)
-- [ ] SDK 2.x 설치 (VS Code Pico 확장 권장)
-- [ ] CMakeLists 수정 (`PICO_BOARD pico2`, `PICO_PLATFORM rp2350`)
-- [ ] Pico 2 보드 교체 + 빌드 검증
-- [ ] LCD/UI 동작 확인 (변경 없이 동작해야 함)
+### Phase 2 — MCU 업그레이드 ✅ 완료
+- [x] **SDK 2.1.1 설치** (E:/pico-sdk-2/sdk, shallow clone + 서브모듈)
+- [x] **picotool 2.2.0 설치** (E:/pico-sdk-2/tools/picotool, RP2350 UF2 family 지원)
+- [x] **pico-env-v2.cmd**: PICO_SDK_PATH 오버라이드 + picotool 2.x PATH 우선
+- [x] **build-v2.cmd**: `pico` / `pico2` 인자로 듀얼 타겟 빌드 (build-v2-<board>/)
+- [x] **FreeRTOSConfig.h**: M33 매크로 추가 (FPU=1, MPU=0, TrustZone=0)
+- [x] **RP2040 빌드 검증**: `build-v2.cmd pico` → 102 KB UF2
+- [x] **RP2350 빌드 검증**: `build-v2.cmd pico2` → 96 KB UF2
+- [x] 기존 GCC 10.3 재사용 (M33 지원 확인됨, 새 툴체인 설치 불필요)
+- [ ] 실 Pico 2 보드 교체 후 펌웨어 굽기 (보드 도착 시)
 
 ### Phase 3 — HAL 확장
 - [ ] `hal_pwm.h` + `hal_pwm_pico.c` (85 kHz, 2 슬라이스)
@@ -1034,3 +1039,4 @@ typedef struct {
 | 2026-04-11 | FreeRTOS 도입 결정: Core 0 bare-metal, Core 1 FreeRTOS (single-core scheduler). UART1 추가 (GP8/GP9). 버튼 TAB/UP을 GP27/GP28로 이동. UART 용도/프로토콜은 미정. |
 | 2026-04-11 | FreeRTOS-Kernel 통합 완료 (Raspberry Pi fork, FetchContent). Core 1 FreeRTOS scheduler 동작. lcd_task가 기존 데모 루프를 대체. 바이너리 50 KB → 100 KB. |
 | 2026-04-11 | PWM 제어 계층 구현: hal_pwm + buck_pwm 모듈 + pwm_task. GP0/GP1이 85 kHz slice 0 A/B에서 듀티 sweep. board_config.h에 BUCK_*_PWM_PIN, BUCK_PWM_FREQ_HZ 추가. |
+| 2026-04-11 | Phase 2 완료: Pico SDK 2.1.1 + picotool 2.2.0 설치 (E:/pico-sdk-2), pico-env-v2.cmd + build-v2.cmd 래퍼 추가. FreeRTOSConfig.h에 M33 매크로 4개 추가. `build-v2.cmd pico` 와 `build-v2.cmd pico2` 둘 다 빌드 성공 (RP2040 102 KB, RP2350 96 KB UF2). 기존 GCC 10.3 재사용. |

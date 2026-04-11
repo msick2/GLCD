@@ -46,6 +46,19 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 - 바이너리 크기: 50 KB → 100 KB (FreeRTOS 커널 ~50 KB 추가)
 - `configNUMBER_OF_CORES = 1` — RTOS는 Core 1 전용, Core 0는 bare-metal 유지 (컨트롤 루프 추가 준비)
 
+### ✅ Phase 2 — SDK 2.1.1 + Pico 1/2 듀얼 타겟 완료
+- Pico SDK **2.1.1** clone at `E:/pico-sdk-2/sdk` (shallow, 366 MB with submodules)
+- **picotool 2.2.0-a4** at `E:/pico-sdk-2/tools/picotool` (RP2350 UF2 family 0xe48bff59 지원)
+- **기존 GCC 10.3 재사용** — M33 (Cortex-M33) 지원 확인됨, 새 툴체인 설치 불필요
+- `pico-env-v2.cmd` — PICO_SDK_PATH를 2.1.1로 override + picotool 2.x를 PATH 앞에
+- `build-v2.cmd [pico|pico2] [clean]` — 타겟별 별도 디렉터리 `build-v2-<board>/`
+- `FreeRTOSConfig.h`에 M33 매크로 4개 추가: `configENABLE_FPU=1`, `configENABLE_MPU=0`, `configENABLE_TRUSTZONE=0`, `configRUN_FREERTOS_SECURE_ONLY=1` (RP2040에서는 무시됨)
+- **빌드 결과**:
+  - RP2040: [build-v2-pico/glcd.uf2](../build-v2-pico/glcd.uf2) — 102 KB
+  - RP2350: [build-v2-pico2/glcd.uf2](../build-v2-pico2/glcd.uf2) — 96 KB (FPU hard-float, 변수로 정렬 최적화 덕분에 더 작음)
+- 기존 `build.cmd` (SDK 1.5.1) + `build/` 는 그대로 남겨둠, 호환성용
+- **소스 코드는 한 줄도 변경 없이 양쪽 모두 빌드됨** (FreeRTOSConfig 매크로 4줄 추가 제외)
+
 ### ✅ Phase 4 부분 — PWM 제어 계층 완료 (Core 1)
 - `src/hal/hal_pwm.h` — 추상 PWM 인터페이스 (opaque channel, init/set_duty/enable)
 - `src/port/pico/hal_pwm_pico.c` — RP2040 구현 (`hardware/pwm.h`, divider 1.0, top 계산)
@@ -58,7 +71,7 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 - duty 분해능: 1/1471 ≈ 0.068%
 - `board_config.h`에 `BUCK_CHARGE_PWM_PIN = 0`, `BUCK_DISCHARGE_PWM_PIN = 1`, `BUCK_PWM_FREQ_HZ = 85000` 추가
 
-### ⏳ Phase 2, 3, 4(ADC), 6~11 — 미착수
+### ⏳ Phase 3, 4(ADC), 6~11 — 미착수
 모든 설계 결정은 끝났음. 코딩만 남음.
 
 ---
@@ -125,24 +138,40 @@ BQ34Z100 퓨얼게이지 학습용 정밀 충방전 보드. 현재 **Phase 1 (LC
 
 ### 환경
 - Windows 10
-- pico-setup-windows v1.5.1 설치 (`C:\Program Files\Raspberry Pi\Pico SDK v1.5.1`)
-- Pico SDK 1.5.1, GCC ARM 10.3, CMake 3.25, Ninja 1.11
+- pico-setup-windows v1.5.1 설치 (`C:\Program Files\Raspberry Pi\Pico SDK v1.5.1`) — 툴체인 제공
+- **Pico SDK 2.1.1** at `E:\pico-sdk-2\sdk` — shallow clone + 서브모듈
+- **picotool 2.2.0** at `E:\pico-sdk-2\tools\picotool` — RP2350 UF2 family 지원
+- GCC ARM 10.3 (SDK 1.5.1 설치에서 재사용), CMake 3.25, Ninja 1.11, Python 3.9
 - VS Code + cmake-tools + cortex-debug
 
-### 빌드
+### 빌드 (권장: SDK 2.x)
 ```cmd
-:: 증분 빌드
-build.cmd
+:: Pico 1 (RP2040) 증분 빌드
+build-v2.cmd pico
 
-:: 클린 빌드 (CMake 재구성)
-build.cmd clean
+:: Pico 2 (RP2350) 증분 빌드
+build-v2.cmd pico2
+
+:: 클린 빌드
+build-v2.cmd pico clean
+build-v2.cmd pico2 clean
 ```
 
-`build.cmd`는 내부적으로 `pico-env.cmd`를 source해서 PATH 설정 후 `cmake -G Ninja .. && ninja` 실행.
+`build-v2.cmd`는 내부적으로 `pico-env-v2.cmd`를 source해서 PICO_SDK_PATH를 SDK 2.1.1으로 override + picotool 2.x를 PATH 앞에 놓고 `cmake -G Ninja -DPICO_BOARD=<board> .. && ninja` 실행.
+
+### 빌드 (레거시: SDK 1.5.1, 호환성용)
+```cmd
+build.cmd          :: 증분
+build.cmd clean    :: 클린
+```
+
+`build.cmd`는 기존 SDK 1.5.1 환경으로 빌드. Pico 1만 지원.
 
 ### 출력
-- `build/glcd.uf2` (~100 KB, FreeRTOS 포함) — Pico에 굽기
-- `build/glcd.elf` (~100 KB) — 디버깅용
+- **SDK 2.x 빌드**:
+  - `build-v2-pico/glcd.uf2` (~102 KB, RP2040) — Pico 1 굽기
+  - `build-v2-pico2/glcd.uf2` (~96 KB, RP2350) — Pico 2 굽기
+- **SDK 1.5.1 빌드** (레거시): `build/glcd.uf2` (~100 KB, RP2040 only)
 
 ### Flash
 1. Pico를 BOOTSEL 누른 채 USB 연결 → RPI-RP2 드라이브 마운트
@@ -347,10 +376,10 @@ Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
 | 우선순위 | Phase | 작업 | 상태 |
 |---|---|---|---|
 | ✅ | **Phase 1** | LCD 드라이버 + 7 페이지 UI + 10 Hz 렌더 | **완료** |
+| ✅ | **Phase 2** | SDK 2.1.1 + Pico 1/2 듀얼 타겟 빌드 | **완료** |
 | ✅ | **Phase 5 일부** | FreeRTOS Core 1 포팅 + `lcd_task` | **완료** |
 | ✅ | **Phase 4 일부** | PWM HAL + `buck_pwm` + `pwm_task` (85 kHz) | **완료** |
-| 1 | **Phase 2** | SDK 2.x 설치 + Pico 2 마이그레이션 (FreeRTOS 자동 포트 전환) | 1~2 시간 |
-| 2 | **Phase 3** | HAL 나머지 (`hal_adc`, `hal_i2c`, `hal_uart`) | 2~3 시간 |
+| 1 | **Phase 3** | HAL 나머지 (`hal_adc`, `hal_i2c`, `hal_uart`) | 2~3 시간 |
 | 3 | **Phase 4 나머지** | AD7606 SPI+DMA 드라이버 + ring buffer + 평균 | 4~6 시간 |
 | 4 | **Phase 7a** | 24LC256 EEPROM 드라이버 + settings 모듈 | 3~4 시간 |
 | 5 | **Phase 5 나머지** | PI 컨트롤러 + CC/CV 머신 + Core 0 8.5 kHz ISR | 6~10 시간 |
@@ -376,11 +405,16 @@ Core 0 (bare-metal RT)          Core 1 (FreeRTOS)
 
 ### 자주 쓰는 명령
 ```bash
-# 빌드
-cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build.cmd"
+# 빌드 (SDK 2.x, 권장)
+cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build-v2.cmd pico"
+cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build-v2.cmd pico2"
 
 # 클린 빌드
-cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build.cmd clean"
+cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build-v2.cmd pico clean"
+cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build-v2.cmd pico2 clean"
+
+# 빌드 (SDK 1.5.1 레거시)
+cmd //c "e:\ONEDRIVE\WORK\01_Developmemt\07_CANTOPS\260410_GLCD\build.cmd"
 
 # git 상태
 git status
@@ -395,7 +429,7 @@ git log --oneline -10
 
 ### 현재 미해결 사항 (의도적으로 남겨둔 것)
 - `src/GLCD/` 빈 폴더가 있음 (사용자가 만든 듯). 그대로 두기. 필요하면 사용자에게 확인 후 삭제.
-- Pico 1으로 빌드되어 있음. Phase 2에서 Pico 2로 옮길 때 SDK 2.x 재설치 필요.
+- **실 Pico 2 보드 교체는 아직 미수행** — UF2는 준비됨, 보드 도착 시 바로 굽기 가능
 - **UART1 용도 / 프로토콜 / baud rate 미정** — Phase 9b 들어가기 전 사용자에게 확인
 
 ---
@@ -435,8 +469,21 @@ git push origin main
 ## 15. 연락처 / 외부 의존성
 
 - **bqStudio** (TI 무료): BQ34Z100 chemistry 사전 등록용. 이 소프트웨어는 EV2300/EV2400 USB-I²C 어댑터가 필요.
-- **Pico SDK 1.5.1** (현재): pico-setup-windows v1.5.1 installer 사용
-- **Pico SDK 2.x** (Phase 2 이후): VS Code Pico 확장으로 설치 권장
+- **Pico SDK 1.5.1** (레거시): `C:\Program Files\Raspberry Pi\Pico SDK v1.5.1` — pico-setup-windows 1.5.1 installer 사용, 툴체인/CMake/Ninja/Python 제공
+- **Pico SDK 2.1.1** (현재, 권장): `E:\pico-sdk-2\sdk` — git shallow clone + 서브모듈 (raspberrypi/pico-sdk @ 2.1.1)
+- **picotool 2.2.0-a4**: `E:\pico-sdk-2\tools\picotool` — RP2350 UF2 family 지원
+  - 다운로드: https://github.com/raspberrypi/pico-sdk-tools/releases/tag/v2.2.0-3
+
+### SDK 2.x 재설치 (필요 시)
+```bash
+mkdir -p /e/pico-sdk-2 && cd /e/pico-sdk-2
+git clone --branch 2.1.1 --depth 1 https://github.com/raspberrypi/pico-sdk.git sdk
+cd sdk && git submodule update --init --depth 1
+
+mkdir -p ../tools && cd ../tools
+curl -sL -o picotool.zip https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-3/picotool-2.2.0-a4-x64-win.zip
+unzip picotool.zip
+```
 
 ---
 
